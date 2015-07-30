@@ -1,208 +1,150 @@
 package main
 
 import (
-	"encoding/json"
 	"flag"
 	"fmt"
-	"io/ioutil"
-	"net/http"
+	"os/exec"
+	"strings"
 	"time"
 	log "github.com/Sirupsen/logrus"
+
+	"github.com/sonchang/nme-controller/metadata"
+	"github.com/sonchang/nme-controller/nme"
+)
+
+const (
+	linkLocalSNIP  = "169.254.0.100"
+	maxRetriesToGetRancherIpForNME = 10
+	waitMillisToGetRancherIpForNME = 1000
 )
 
 var (
-	debug       = flag.Bool("debug", true, "Debug")
-	metadataUrl = flag.String("metadata", "metadata:8083", "URL to metadata server")
-	nmeRestUrl  = flag.String("nme", "", "URL to Netscaler NITRO REST API")
-	poll        = flag.Int("poll", 1000, "Poll interval in millis")
-
-        metadataHash string
-	lbConfig     []interface{}
+	debug          = flag.Bool("debug", true, "Debug")
+	nmeContainerId = flag.String("nmeContainerId", "", "nme container ID")
+	metadataUrl    = flag.String("metadata", "metadata:8083", "URL to metadata server")
+	nmeRestUrl     = flag.String("nme", "", "URL to Netscaler NITRO REST API")
+	poll           = flag.Int("poll", 1000, "Poll interval in millis")
 )
 
 func main() {
 	log.Info("Starting Netscaler controller")
 	parseFlags()
+
+	metadataHandler := metadata.NewHandler(*metadataUrl)
+	nmeHandler := nme.NewHandler(nme.NewNitroApi(*nmeRestUrl))
+
+	initializeNME(nmeHandler)
+
+	// TODO: query nme to obtain lbconfigs in case of server restart
+	lbConfig := new(nme.LbConfigs)
+
 	for {
-		hash, err := getMetadataHash()
+		hash, err := metadataHandler.GetHash()
 		if err != nil {
 			log.Errorf("error = %v", err)
 			time.Sleep(time.Duration(*poll) * time.Millisecond)
 			continue;
 		}
-		if hash == metadataHash {
+		if hash == lbConfig.Hash {
+			log.Debugf("no change in hash: %s", hash)
 			time.Sleep(time.Duration(*poll) * time.Millisecond)
 			continue
 		}
-		metadataHash = hash
-		// TODO: Figure out diff
-		mappings, err := getMappingsFromMetadata()
+		newConfig, err := metadataHandler.GetLbConfig()
+		if newConfig != nil {
+			log.Debugf("newConfig = %v", newConfig)
+			err = applyDiffs(lbConfig.LbConfig, newConfig, nmeHandler)
+		}
 		if err != nil {
 			log.Errorf("error = %v", err)
 		} else {
-			log.Debugf("mappings = %v", mappings)
-			err = applyMappingsToLB(mappings)
+			lbConfig.Hash = hash
+			lbConfig.LbConfig = newConfig
 		}
 
 		time.Sleep(time.Duration(*poll) * time.Millisecond)
 	}
 }
 
-func getMetadataHash() (string, error) {
-	client := &http.Client{}
-	req, err := http.NewRequest("GET", "http://" + *metadataUrl + "/latest/hash", nil)
-        resp, err := client.Do(req)
-        defer resp.Body.Close()
-        if err != nil {
-                return "", err
-        }
-        body, err := ioutil.ReadAll(resp.Body)
-        if err != nil {
-                return "", err
-        }
-        log.Debugf("resp body=%s", string(body[:]))
-	return string(body[:]), nil
+func initializeNME(nmeHandler nme.NmeHandler) error {
+	err := nmeHandler.AddNSIP(linkLocalSNIP)
+	if err != nil {
+		return err
+	}
+
+	// get rancher's managed network IP for nme container
+	cmdstr := fmt.Sprint("/usr/bin/docker exec ", *nmeContainerId, " ip addr show | grep -oP \"10\\.42\\.(\\d+)\\.(\\d+)\"")
+	attempts := 1
+	for {
+		cmd := exec.Command("bash", "-c", cmdstr)
+		rancherIp, err := cmd.Output()
+		if err != nil {
+			if attempts > maxRetriesToGetRancherIpForNME {
+				log.Fatalf("error = %v", err)
+			}
+			log.Errorf("attempt %v: error = %v", attempts, err)
+			time.Sleep(time.Duration(waitMillisToGetRancherIpForNME) * time.Millisecond)
+			attempts++
+		} else {
+			return nmeHandler.AddNSIP(strings.TrimSpace(string(rancherIp)))
+		}
+	}
 }
 
-// TODO: Possibly create a struct type for mappings rather than generic interface{}
-// Make HTTP GET from metadata, parse JSON results, and map to LB mappings
-func getMappingsFromMetadata() (interface{}, error) {
-	client := &http.Client{}
-	req, err := http.NewRequest("GET", "http://" + *metadataUrl + "/latest/stacks", nil)
-	req.Header.Add("Accept", "application/json")
-	resp, err := client.Do(req)
-	defer resp.Body.Close()
-	if err != nil {
-		return nil, err
-	}
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-	log.Debugf("resp body=%s", string(body[:]))
-	var mappings interface{}
-	err = json.Unmarshal(body, &mappings)
-	return mappings, err
-}
 
-// NOTE: Since this might change, I'm not spending too much time
-// making this clean
-func applyMappingsToLB(mappings interface{}) error {
-	if mappings == nil {
-		// TODO: handle diff
-		return nil
-	}
-	stacks, ok := mappings.([]interface{})
-	if ok {
-		for i := range stacks {
-			stack := stacks[i]
-			stackMetadata, ok := stack.(map[string]interface{})
-			if !ok {
-				continue
+func applyDiffs(currentConfig map[string]nme.Lbvserver, newConfig map[string]nme.Lbvserver, nmeHandler nme.NmeHandler) error {
+	for lbvserverName, newLbvserver := range newConfig {
+		// add any new services
+		if currentLbvserver, ok := currentConfig[lbvserverName]; !ok {
+			err := nmeHandler.CreateLB(newLbvserver)
+			if err != nil {
+				return err
 			}
-			services, ok := stackMetadata["services"].([]interface{})
-			if services == nil || !ok {
-				continue
-			}
-			for j := range services {
-				service, ok := services[j].(map[string]interface{})
-				if !ok {
-					continue
+		} else {
+			// update existing lbvserver with new service bindings
+			// ASSUMPTION: VIP does not change
+			for serviceName, newService := range newLbvserver.Bindings {
+				var err error
+				if currentService, ok := currentLbvserver.Bindings[serviceName]; !ok {
+					// create new service+binding
+					err = nmeHandler.CreateServiceAndBinding(newLbvserver, newService)
+				} else {
+					// check whether IP needs to be updated or not
+					if newService.IpAddress != currentService.IpAddress {
+						err = nmeHandler.UpdateServiceIp(newLbvserver, newService)
+					}
 				}
-				vip := service["ip"].(string)
-				serviceName := service["name"].(string)
-				containers := service["containers"].([]interface{})
-				createLB(vip, serviceName, containers)
+				if err != nil {
+					return err
+				}
+			}
+			for serviceName, currentService := range currentLbvserver.Bindings {
+				if _, ok := newLbvserver.Bindings[serviceName]; !ok {
+					err := nmeHandler.DeleteServiceAndBinding(currentService)
+					if err != nil {
+						return err
+					}
+				}
 			}
 		}
-	} else {
-		return fmt.Errorf("Error parsing services from metadata server %v", mappings)
 	}
-	return nil
-}
 
-func postToNitro(url string, contentType string, jsonContent string) error {
-	client := &http.Client{}
-	req, err := http.NewRequest("POST", "http://" + *nmeRestUrl + "/" + url, nil)
-	req.Header.Add("X-NITRO-USER", "root")
-	req.Header.Add("X-NITRO-PASS", "linux")
-	req.Header.Add("Content-Type", contentType)
-	resp, err := client.Do(req)
-	defer resp.Body.Close()
-	// TODO: Error handling
-	return err
-}
-
-func createLB(vip string, serviceName string, containers []interface{}) error {
-	err := createLbvserver(serviceName, vip)
-	if err != nil {
-		return err
-	}
-	for i := range containers {
-		container := containers[i].(map[string]string)
-		name := container["name"]
-		ip := container["ip"]
-		err := createService(name, ip)
-		if err != nil {
-			return err
-		}
-		err = bindServiceToLbvserver(serviceName, name)
-		if err != nil {
-			return err
+	// remove deleted services
+	for lbvserverName, currentLbvserver := range currentConfig {
+		if _, ok := newConfig[lbvserverName]; !ok {
+			err := nmeHandler.DeleteLB(currentLbvserver)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	return nil
-}
-
-// Refactor these to its own class
-func createService(name string, ip string) error {
-	service := make(map[string]map[string]string)
-	service["service"] = make(map[string]string)
-	service["service"]["name"] = name
-	service["service"]["servicetype"] = "ANY"
-	service["service"]["ip"] = ip
-	service["service"]["port"] = "*"
-
-	data, err := json.Marshal(service)
-	if err != nil {
-		return err
-	}
-	err = postToNitro("/nitro/v1/config/service", "application/vnd.com.citrix.netscaler.service+json", string(data[:]))
-	return err
-}
-
-func createLbvserver(serviceName string, vip string) error {
-	lb := make(map[string]map[string]string)
-	lb["lbvserver"] = make(map[string]string)
-	lb["lbvserver"]["name"] = serviceName
-	lb["lbvserver"]["servicetype"] = "ANY"
-	lb["lbvserver"]["ipv46"] = vip
-	lb["lbvserver"]["port"] = "*"
-
-	data, err := json.Marshal(lb)
-	if err != nil {
-		return err
-	}
-	err = postToNitro("/nitro/v1/config/lbvserver", "application/vnd.com.citrix.netscaler.lbvserver+json", string(data[:]))
-        return err
-}
-
-func bindServiceToLbvserver(lbServiceName string, individualServiceName string) error {
-	binding := make(map[string]map[string]string)
-	binding["lbserver_service_binding"] = make(map[string]string)
-	binding["lbserver_service_binding"]["name"] = lbServiceName
-	binding["lbserver_service_binding"]["servicename"] = individualServiceName
-
-        data, err := json.Marshal(binding)
-        if err != nil {
-                return err
-        }       
-        err = postToNitro("/nitro/v1/config/lbvserver_service_binding/" + lbServiceName, "application/vnd.com.citrix.netscaler.lbvserver_service_binding+json", string(data[:]))
-        return err
 }
 
 func parseFlags() {
 	flag.Parse()
+
+	log.Debugf("nmeContainerId=%s, metadataUrl=%s, nmeUrl=%s", *nmeContainerId, *metadataUrl, *nmeRestUrl)
 
 	if *debug {
 		log.SetLevel(log.DebugLevel)
