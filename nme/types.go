@@ -3,6 +3,7 @@ package nme
 type Lbvserver struct {
 	Name string
 	IpAddress string
+	Port string
 	Bindings map[string]Service
 }
 
@@ -13,5 +14,6 @@ type Service struct {
 
 type LbConfigs struct {
 	Hash string
-	LbConfig map[string]Lbvserver
+	NSIPs []string
+	LbMaps map[string]Lbvserver
 }

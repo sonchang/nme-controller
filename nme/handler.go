@@ -1,8 +1,16 @@
 package nme
 
+import (
+	log "github.com/Sirupsen/logrus"
+)
+
 type NmeHandler struct {
 	apiHandler NitroApi
 }
+
+const (
+	defaultDockerSNIP = "172.17.0.200"
+)
 
 func NewHandler(nitroApi NitroApi) NmeHandler {
 	return NmeHandler{
@@ -10,8 +18,68 @@ func NewHandler(nitroApi NitroApi) NmeHandler {
 	}
 }
 
-func (n NmeHandler) AddNSIP(ip string) error {
-	return n.apiHandler.AddNSIP(ip)
+func (n NmeHandler) LoadConfigs() (map[string]Lbvserver, error) {
+	lbvservers, err := n.apiHandler.GetLbvservers()
+	if err != nil {
+		return nil, err
+	}
+	lbConfigs := make(map[string]Lbvserver)
+	for lbvserverName, lbvserverMap := range lbvservers {
+		vip := lbvserverMap["ipaddress"]
+		port := lbvserverMap["port"]
+
+		lbvServerBindings := make(map[string]Service)
+		bindings, err := n.apiHandler.GetLbvserverBindings(lbvserverName)
+		if err != nil {
+			log.Errorf("Error getting service bindings for %s: %v", lbvserverName, err)
+			continue;
+		}
+		for serviceName, serviceDetailsMap := range bindings {
+			serviceBinding := Service{
+				Name: serviceName,
+				IpAddress: serviceDetailsMap["ipaddress"],
+			}
+			lbvServerBindings[serviceName] = serviceBinding
+		}
+
+		lbConfig := Lbvserver{
+			Name: lbvserverName,
+			IpAddress: vip,
+			Port: port,
+			Bindings: lbvServerBindings,
+		}
+		lbConfigs[lbvserverName] = lbConfig
+	}
+	return lbConfigs, nil
+}
+
+func (n NmeHandler) UpdateNSIP(ipAddresses ...string) error {
+	currentSNIPMap, err := n.apiHandler.GetSNIPs()
+	if err != nil {
+		return err
+	}
+
+	newSNIPMap := make(map[string]bool)
+	for i := range ipAddresses {
+		newSNIPMap[ipAddresses[i]] = true
+		//if _, ok := currentSNIPMap[ipAddresses[i]]; !ok {
+		if currentSNIPMap[ipAddresses[i]] == false {
+			err := n.apiHandler.AddNSIP(ipAddresses[i])
+			if err != nil {
+				return err
+			}
+		}
+	}
+	for snip := range currentSNIPMap {
+		//if _, ok := newSNIPMap[snip]; !ok {
+		if newSNIPMap[snip] == false && snip != defaultDockerSNIP {
+			err := n.apiHandler.DeleteNSIP(snip)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (n NmeHandler) CreateLB(lb Lbvserver) error {

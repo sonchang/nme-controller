@@ -1,6 +1,7 @@
 package nme
 
 import (
+	"fmt"
 	"encoding/json"
 	"io/ioutil"
 	"math"
@@ -20,12 +21,12 @@ func NewNitroApi(baseUrl string) NitroApi {
 	}
 }
 
-func (n NitroApi) executeRequest(method string, url string, contentType string, jsonContent string) error {
+func (n NitroApi) executeRequest(method string, url string, contentType string, jsonContent string) (interface{}, error) {
 	log.Debugf("HTTP %s to %s, contents=%s", method, url, jsonContent)
 	client := &http.Client{}
 	req, err := http.NewRequest(method, "http://" + n.nitroBaseUrl + url, strings.NewReader(jsonContent))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	req.Header.Add("X-NITRO-USER", "root")
 	req.Header.Add("X-NITRO-PASS", "linux")
@@ -34,14 +35,14 @@ func (n NitroApi) executeRequest(method string, url string, contentType string, 
 	for {
 		resp, err := client.Do(req)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		defer resp.Body.Close()
 		log.Debugf("response StatusCode: %v", resp.StatusCode)
 		body, _ := ioutil.ReadAll(resp.Body)
 		log.Debugf("response Body: %v", string(body))
 		if resp.StatusCode == 200 || resp.StatusCode == 201 || resp.StatusCode == 409 {
-			return nil
+			return body, nil
 		}
 		millis := math.Min(60000, math.Pow(2, attempts) * 1000)
 		log.Debugf("waiting %v millis", millis)
@@ -49,6 +50,89 @@ func (n NitroApi) executeRequest(method string, url string, contentType string, 
 		attempts++
 	}
 
+	return nil, err
+}
+
+func (n NitroApi) GetLbvservers() (map[string]map[string]string, error) {
+	resp, err := n.executeRequest("GET", "/nitro/v1/config/lbvserver", "", "")
+	if err != nil {
+		return nil, err
+	}
+	var jsonMap interface{}
+	err = json.Unmarshal(resp.([]byte), &jsonMap)
+	if err != nil {
+		return nil, err
+	}
+
+	lbvservers := make(map[string]map[string]string)
+	lbvserverMaps, ok := jsonMap.(map[string]interface{})["lbvserver"].([]interface{})
+	if !ok {
+		return lbvservers, nil
+	}
+	for i := range lbvserverMaps {
+		lbvserverMap := lbvserverMaps[i].(map[string]interface{})
+
+		lbvserverDetails := make(map[string]string)
+		lbvserverDetails["ipaddress"] = lbvserverMap["ipv46"].(string)
+		lbvserverDetails["port"] = fmt.Sprintf("%s", lbvserverMap["port"])
+
+		name := lbvserverMap["name"].(string)
+		lbvservers[name] = lbvserverDetails
+	}
+	return lbvservers, nil
+}
+
+func (n NitroApi) GetLbvserverBindings(lbvserverName string) (map[string]map[string]string, error) {
+	resp, err := n.executeRequest("GET", "/nitro/v1/config/lbvserver_service_binding/" + lbvserverName, "", "")
+	if err != nil {
+		return nil, err
+	}
+	var jsonMap interface{}
+	err = json.Unmarshal(resp.([]byte), &jsonMap)
+	if err != nil {
+		return nil, err
+	}
+	lbvserverBindings := make(map[string]map[string]string)
+	lbvserverBindingMaps, ok := jsonMap.(map[string]interface{})["lbvserver_service_binding"].([]interface{})
+	if !ok {
+		return lbvserverBindings, nil
+	}
+	for i := range lbvserverBindingMaps {
+		lbvserverBindingMap := lbvserverBindingMaps[i].(map[string]interface{})
+
+		lbvserverBindingDetails := make(map[string]string)
+		lbvserverBindingDetails["ipaddress"] = lbvserverBindingMap["ipv46"].(string)
+		// port and servicetype?
+
+		name := lbvserverBindingMap["servicename"].(string)
+		lbvserverBindings[name] = lbvserverBindingDetails
+	}
+	return lbvserverBindings, nil
+}
+
+func (n NitroApi) GetSNIPs() (map[string]bool, error) {
+	resp, err := n.executeRequest("GET", "/nitro/v1/config/nsip?filter=iptype:SNIP", "", "")
+	if err != nil {
+		return nil, err
+	}
+	var jsonMap interface{}
+	err = json.Unmarshal(resp.([]byte), &jsonMap)
+	if err != nil {
+		return nil, err
+	}
+	// TODO: There's a lot of casting/type assertion going on here.
+	// Is there an easy way to catch these errors and handle it appropriately?
+	snipMaps := jsonMap.(map[string]interface{})["nsip"].([]interface{})
+	snips := make(map[string]bool)
+	for i := range snipMaps {
+		snipMap := snipMaps[i].(map[string]interface{})
+		snips[snipMap["ipaddress"].(string)] = true
+	}
+	return snips, nil
+}
+
+func (n NitroApi) DeleteNSIP(ip string) error {
+	_, err := n.executeRequest("DELETE", "/nitro/v1/config/nsip/" + ip, "", "")
 	return err
 }
 
@@ -63,7 +147,7 @@ func (n NitroApi) AddNSIP(ip string) error {
 	if err != nil {
 		return err
 	}
-	err = n.executeRequest("POST", "/nitro/v1/config/nsip", "application/vnd.com.citrix.netscaler.nsip+json", string(data[:]))
+	_, err = n.executeRequest("POST", "/nitro/v1/config/nsip", "application/vnd.com.citrix.netscaler.nsip+json", string(data[:]))
 	return err
 }
 
@@ -80,12 +164,13 @@ func (n NitroApi) CreateService(name string, ip string) error {
 	if err != nil {
 		return err
 	}
-	err = n.executeRequest("POST", "/nitro/v1/config/service", "application/vnd.com.citrix.netscaler.service+json", string(data[:]))
+	_, err = n.executeRequest("POST", "/nitro/v1/config/service", "application/vnd.com.citrix.netscaler.service+json", string(data[:]))
 	return err
 }
 
 func (n NitroApi) DeleteService(name string) error {
-	return n.executeRequest("DELETE", "/nitro/v1/config/service/" + name, "application/vnd.com.citrix.netscaler.service+json", "")
+	_, err := n.executeRequest("DELETE", "/nitro/v1/config/service/" + name, "application/vnd.com.citrix.netscaler.service+json", "")
+	return err
 }
 
 func (n NitroApi) CreateLbvserver(lbvserverName string, vip string) error {
@@ -100,12 +185,13 @@ func (n NitroApi) CreateLbvserver(lbvserverName string, vip string) error {
 	if err != nil {
 		return err
 	}
-	err = n.executeRequest("POST", "/nitro/v1/config/lbvserver", "application/vnd.com.citrix.netscaler.lbvserver+json", string(data[:]))
+	_, err = n.executeRequest("POST", "/nitro/v1/config/lbvserver", "application/vnd.com.citrix.netscaler.lbvserver+json", string(data[:]))
 	return err
 }
 
 func (n NitroApi) DeleteLbvserver(name string) error {
-	return n.executeRequest("DELETE", "/nitro/v1/config/lbvserver/" + name, "application/vnd.com.citrix.netscaler.lbvserver+json", "")
+	_, err := n.executeRequest("DELETE", "/nitro/v1/config/lbvserver/" + name, "application/vnd.com.citrix.netscaler.lbvserver+json", "")
+	return err
 }
 
 func (n NitroApi) BindServiceToLbvserver(lbServiceName string, individualServiceName string) error {
@@ -118,7 +204,7 @@ func (n NitroApi) BindServiceToLbvserver(lbServiceName string, individualService
 	if err != nil {
 		return err
 	}       
-	err = n.executeRequest("POST", "/nitro/v1/config/lbvserver_service_binding/" + lbServiceName, "application/vnd.com.citrix.netscaler.lbvserver_service_binding+json", string(data[:]))
+	_, err = n.executeRequest("POST", "/nitro/v1/config/lbvserver_service_binding/" + lbServiceName, "application/vnd.com.citrix.netscaler.lbvserver_service_binding+json", string(data[:]))
 	return err
 }
 

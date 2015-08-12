@@ -33,10 +33,21 @@ func main() {
 	metadataHandler := metadata.NewHandler(*metadataUrl)
 	nmeHandler := nme.NewHandler(nme.NewNitroApi(*nmeRestUrl))
 
-	initializeNME(nmeHandler)
+	nmeRancherIpAddress := getNmeRancherIpAddress()
+	err := nmeHandler.UpdateNSIP(linkLocalSNIP, nmeRancherIpAddress)
+	if err != nil {
+		log.Fatalf("Unable to update nme with SNIPs: %s, %s; %v", linkLocalSNIP, nmeRancherIpAddress, err)
+	}
 
-	// TODO: query nme to obtain lbconfigs in case of server restart
-	lbConfig := new(nme.LbConfigs)
+	lbMaps, err := nmeHandler.LoadConfigs()
+	if err != nil {
+		log.Fatalf("Unable to load existing configs from nme: %v", err)
+	}
+	lbConfig := nme.LbConfigs{
+		Hash: "",
+		NSIPs: []string { linkLocalSNIP, nmeRancherIpAddress },
+		LbMaps: lbMaps,
+	}
 
 	for {
 		hash, err := metadataHandler.GetHash()
@@ -50,29 +61,24 @@ func main() {
 			time.Sleep(time.Duration(*poll) * time.Millisecond)
 			continue
 		}
-		newConfig, err := metadataHandler.GetLbConfig()
-		if newConfig != nil {
-			log.Debugf("newConfig = %v", newConfig)
-			err = applyDiffs(lbConfig.LbConfig, newConfig, nmeHandler)
+		newLbMaps, err := metadataHandler.GetLbConfig()
+		if newLbMaps != nil {
+			log.Debugf("newLbMaps = %v", newLbMaps)
+			err = applyDiffs(lbConfig.LbMaps, newLbMaps, nmeHandler)
 		}
 		if err != nil {
 			log.Errorf("error = %v", err)
 		} else {
 			lbConfig.Hash = hash
-			lbConfig.LbConfig = newConfig
+			lbConfig.LbMaps = newLbMaps
 		}
 
 		time.Sleep(time.Duration(*poll) * time.Millisecond)
 	}
 }
 
-func initializeNME(nmeHandler nme.NmeHandler) error {
-	err := nmeHandler.AddNSIP(linkLocalSNIP)
-	if err != nil {
-		return err
-	}
-
-	// get rancher's managed network IP for nme container
+// get rancher's managed network IP for nme container
+func getNmeRancherIpAddress() string {
 	cmdstr := fmt.Sprint("/usr/bin/docker exec ", *nmeContainerId, " ip addr show | grep -oP \"10\\.42\\.(\\d+)\\.(\\d+)\"")
 	attempts := 1
 	for {
@@ -86,11 +92,10 @@ func initializeNME(nmeHandler nme.NmeHandler) error {
 			time.Sleep(time.Duration(waitMillisToGetRancherIpForNME) * time.Millisecond)
 			attempts++
 		} else {
-			return nmeHandler.AddNSIP(strings.TrimSpace(string(rancherIp)))
+			return strings.TrimSpace(string(rancherIp))
 		}
 	}
 }
-
 
 func applyDiffs(currentConfig map[string]nme.Lbvserver, newConfig map[string]nme.Lbvserver, nmeHandler nme.NmeHandler) error {
 	for lbvserverName, newLbvserver := range newConfig {
