@@ -5,16 +5,16 @@ import (
 )
 
 type NmeHandler struct {
-	apiHandler NitroApi
+	apiHandler NmeApi
 }
 
 const (
 	defaultDockerSNIP = "172.17.0.200"
 )
 
-func NewHandler(nitroApi NitroApi) NmeHandler {
+func NewHandler(apiHandler NmeApi) NmeHandler {
 	return NmeHandler{
-		apiHandler: nitroApi,
+		apiHandler: apiHandler,
 	}
 }
 
@@ -62,7 +62,6 @@ func (n NmeHandler) UpdateNSIP(ipAddresses ...string) error {
 	newSNIPMap := make(map[string]bool)
 	for i := range ipAddresses {
 		newSNIPMap[ipAddresses[i]] = true
-		//if _, ok := currentSNIPMap[ipAddresses[i]]; !ok {
 		if currentSNIPMap[ipAddresses[i]] == false {
 			err := n.apiHandler.AddNSIP(ipAddresses[i])
 			if err != nil {
@@ -71,7 +70,6 @@ func (n NmeHandler) UpdateNSIP(ipAddresses ...string) error {
 		}
 	}
 	for snip := range currentSNIPMap {
-		//if _, ok := newSNIPMap[snip]; !ok {
 		if newSNIPMap[snip] == false && snip != defaultDockerSNIP {
 			err := n.apiHandler.DeleteNSIP(snip)
 			if err != nil {
