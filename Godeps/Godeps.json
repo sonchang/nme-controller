@@ -1,0 +1,11 @@
+{
+	"ImportPath": "github.com/sonchang/nme-controller",
+	"GoVersion": "go1.2.1",
+	"Deps": [
+		{
+			"ImportPath": "github.com/Sirupsen/logrus",
+			"Comment": "v0.8.6-7-g9c060de",
+			"Rev": "9c060de643590dae45da9d7c26276463bfc46fa0"
+		}
+	]
+}

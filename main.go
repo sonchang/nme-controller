@@ -3,17 +3,17 @@ package main
 import (
 	"flag"
 	"fmt"
+	log "github.com/sonchang/nme-controller/Godeps/_workspace/src/github.com/Sirupsen/logrus"
 	"os/exec"
 	"strings"
 	"time"
-	log "github.com/Sirupsen/logrus"
 
 	"github.com/sonchang/nme-controller/metadata"
 	"github.com/sonchang/nme-controller/nme"
 )
 
 const (
-	linkLocalSNIP  = "169.254.0.100"
+	linkLocalSNIP                  = "169.254.0.100"
 	maxRetriesToGetRancherIpForNME = 10
 	waitMillisToGetRancherIpForNME = 1000
 )
@@ -44,8 +44,8 @@ func main() {
 		log.Fatalf("Unable to load existing configs from nme: %v", err)
 	}
 	lbConfig := nme.LbConfigs{
-		Hash: "",
-		NSIPs: []string { linkLocalSNIP, nmeRancherIpAddress },
+		Hash:   "",
+		NSIPs:  []string{linkLocalSNIP, nmeRancherIpAddress},
 		LbMaps: lbMaps,
 	}
 
@@ -54,7 +54,7 @@ func main() {
 		if err != nil {
 			log.Errorf("error = %v", err)
 			time.Sleep(time.Duration(*poll) * time.Millisecond)
-			continue;
+			continue
 		}
 		if hash == lbConfig.Hash {
 			log.Debugf("no change in hash: %s", hash)
