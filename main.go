@@ -21,7 +21,7 @@ const (
 var (
 	debug          = flag.Bool("debug", true, "Debug")
 	nmeContainerId = flag.String("nmeContainerId", "", "nme container ID")
-	metadataUrl    = flag.String("metadata", "metadata:8083", "URL to metadata server")
+	metadataUrl    = flag.String("metadata", "rancher-metadata", "URL to metadata server")
 	nmeRestUrl     = flag.String("nme", "", "URL to Netscaler NITRO REST API")
 	poll           = flag.Int("poll", 1000, "Poll interval in millis")
 )

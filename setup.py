@@ -122,7 +122,7 @@ class NSImage:
         print "Linked Netscaler container cid=" + self.containerid +" pid=" + self.pid + " to bridge " + bridge
         (status, output) = commands.getstatusoutput("/usr/bin/docker inspect -f {{.NetworkSettings.IPAddress}} " + self.containerid)
         self.dockerip = output
-        subprocess.Popen(["/bin/sh", "nme_controller.sh", self.dockerip, self.containerid])
+        subprocess.Popen(["/usr/bin/nme-controller", "-nme", self.dockerip, "-nmeContainerId", self.containerid])
         self.append_nsip_conf()
         nslog.log("Linked Netscaler Container containerid: " + self.containerid + " pid=" + self.pid + " to bridge " + bridge)
         nslog.log("Netscaler Started with ip =" + self.dockerip)

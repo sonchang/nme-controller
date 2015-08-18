@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
-	log "github.com/Sirupsen/logrus"
+	log "github.com/sonchang/nme-controller/Godeps/_workspace/src/github.com/Sirupsen/logrus"
 )
 
 type NitroApi struct {
@@ -35,17 +35,18 @@ func (n NitroApi) executeRequest(method string, url string, contentType string, 
 	for {
 		resp, err := client.Do(req)
 		if err != nil {
-			return nil, err
+			log.Errorf("%v", err)
+		} else {
+			defer resp.Body.Close()
+			log.Debugf("response StatusCode: %v", resp.StatusCode)
+			body, _ := ioutil.ReadAll(resp.Body)
+			log.Debugf("response Body: %v", string(body))
+			if resp.StatusCode == 200 || resp.StatusCode == 201 || resp.StatusCode == 409 {
+				return body, nil
+			}
 		}
-		defer resp.Body.Close()
-		log.Debugf("response StatusCode: %v", resp.StatusCode)
-		body, _ := ioutil.ReadAll(resp.Body)
-		log.Debugf("response Body: %v", string(body))
-		if resp.StatusCode == 200 || resp.StatusCode == 201 || resp.StatusCode == 409 {
-			return body, nil
-		}
-		millis := math.Min(60000, math.Pow(2, attempts) * 1000)
-		log.Debugf("waiting %v millis", millis)
+		millis := math.Min(60000, math.Pow(2, attempts) * 100)
+		log.Debugf("attempt %v, waiting %v millis", attempts, millis)
 		time.Sleep(time.Duration(millis) * time.Millisecond)
 		attempts++
 	}

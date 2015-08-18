@@ -1,7 +1,7 @@
 package nme
 
 import (
-	log "github.com/Sirupsen/logrus"
+	log "github.com/sonchang/nme-controller/Godeps/_workspace/src/github.com/Sirupsen/logrus"
 )
 
 type NmeHandler struct {
@@ -99,6 +99,9 @@ func (n NmeHandler) DeleteLB(lb Lbvserver) error {
 }
 
 func (n NmeHandler) CreateServiceAndBinding(lb Lbvserver, service Service) error {
+	if service.Name == "" || service.IpAddress == "" {
+		return nil
+	}
 	err := n.apiHandler.CreateService(service.Name, service.IpAddress)
 	if err != nil {
 		return err
