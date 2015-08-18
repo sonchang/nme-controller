@@ -20,9 +20,9 @@ func NewHandler(url string) MetadataHandler {
 	}
 }
 
-func (m MetadataHandler) GetHash() (string, error) {
+func (m *MetadataHandler) GetHash() (string, error) {
 	client := &http.Client{}
-	req, err := http.NewRequest("GET", "http://" + m.metadataUrl + "/latest/hash", nil)
+	req, err := http.NewRequest("GET", "http://" + m.metadataUrl + "/latest/updated", nil)
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
@@ -37,98 +37,116 @@ func (m MetadataHandler) GetHash() (string, error) {
 }
 
 // Make HTTP GET from metadata, parse JSON results, and map to LB mappings
-func (m MetadataHandler) GetLbConfig() (map[string]nme.Lbvserver, error) {
+func (m *MetadataHandler) GetLbConfig() (map[string]nme.Lbvserver, error) {
 	client := &http.Client{}
-	req, err := http.NewRequest("GET", "http://" + m.metadataUrl + "/latest/stacks", nil)
-	req.Header.Add("Accept", "application/json")
-	resp, err := client.Do(req)
-	defer resp.Body.Close()
+	serviceReq, err := http.NewRequest("GET", "http://" + m.metadataUrl + "/latest/services", nil)
 	if err != nil {
 		return nil, err
 	}
-	body, err := ioutil.ReadAll(resp.Body)
+	serviceReq.Header.Add("Accept", "application/json")
+	serviceResp, err := client.Do(serviceReq)
+	defer serviceResp.Body.Close()
+	if err != nil {
+		return nil, err
+	}
+	body, err := ioutil.ReadAll(serviceResp.Body)
 	if err != nil {
 		return nil, err
 	}
 	log.Debugf("resp body=%s", string(body[:]))
-	var mappings interface{}
-	err = json.Unmarshal(body, &mappings)
+	var serviceMappings interface{}
+	err = json.Unmarshal(body, &serviceMappings)
 	if err != nil {
 		return nil, err
 	}
 
-	// this will likely change
-	stacks, ok := mappings.([]interface{})
+	services, ok := serviceMappings.([]interface{})
 	if !ok {
-		return nil, fmt.Errorf("Unexpected JSON results from metadata service: %v", mappings)
+		return nil, fmt.Errorf("Unexpected JSON results from metadata service: %v", serviceMappings)
 	}
-	lbConfig, err := m.getLbConfigFromStacks(stacks)
+
+	containerReq, err := http.NewRequest("GET", "http://" + m.metadataUrl + "/latest/containers", nil)
+	if err != nil {
+		return nil, err
+	}
+	containerReq.Header.Add("Accept", "application/json")
+	containerResp, err := client.Do(containerReq)
+	defer containerResp.Body.Close()
+	if err != nil {
+		return nil, err
+	}
+	body, err = ioutil.ReadAll(containerResp.Body)
+	if err != nil {
+		return nil, err
+	}
+	log.Debugf("resp body=%s", string(body[:]))
+	var containerMappings interface{}
+	err = json.Unmarshal(body, &containerMappings)
+	if err != nil {
+		return nil, err
+	}
+
+	containers, ok := containerMappings.([]interface{})
+	if !ok {
+		return nil, fmt.Errorf("Unexpected JSON results from metadata service: %v", containerMappings)
+	}
+
+	lbConfig, err := m.getLbConfigFromJSONResults(services, containers)
 	return lbConfig, err
 }
 
-func (m MetadataHandler) getLbConfigFromStacks(stacks []interface{}) (map[string]nme.Lbvserver, error) {
+func (m *MetadataHandler) getLbConfigFromJSONResults(services, containers []interface{}) (map[string]nme.Lbvserver, error) {
 	newConfig := make(map[string]nme.Lbvserver)
+	nmeServices := make(map[string]nme.Service)
 
-	for i := range stacks {
-		stack := stacks[i]
-		stackMetadata, ok := stack.(map[string]interface{})
-		if !ok {
-			return nil, fmt.Errorf("Error parsing stack data: %v", stack)
-		}
-		services, ok := stackMetadata["services"].([]interface{})
-		if !ok {
-			return nil, fmt.Errorf("Error parsing services data: %v", stackMetadata["services"])
-		}
-		if services == nil {
-			continue
-		}
-
-		for j := range services {
-			service, ok := services[j].(map[string]interface{})
-			if !ok {
-				return nil, fmt.Errorf("Error parsing service data: %v", services[j])
-			}
-			lbvserver, err := m.getLbvserverFromService(service)
-			if err != nil {
-				return nil, err
-			}
-			newConfig[(*lbvserver).Name] = *lbvserver
-		}
-	}
-	return newConfig, nil
-}
-
-func (m MetadataHandler) getLbvserverFromService(service map[string]interface{}) (*nme.Lbvserver, error) {
-	// TODO: if serviceName does not include stack name, prepend it
-	serviceName := service["name"].(string)
-	vip := service["ip"].(string)
-	serviceBindings, err := m.getServiceBindingsFromContainers(service["containers"].([]interface{}))
-	if err != nil {
-		return nil, err
-	}
-
-	lbvserver := nme.Lbvserver {
-		Name: serviceName, 
-		IpAddress: vip,
-		 Bindings: serviceBindings,
-	}
-	return &lbvserver, nil
-}
-
-func (m MetadataHandler) getServiceBindingsFromContainers(containers []interface{}) (map[string]nme.Service, error) {
-	bindings := make(map[string]nme.Service)
 	for i := range containers {
 		container, ok := containers[i].(map[string]interface{})
 		if !ok {
 			return nil, fmt.Errorf("Error parsing container data: %v", containers[i])
 		}
+		stackServiceName := container["name"].(string) //container["stackName"].(string) + "/" + container["serviceName"].(string)
 		name := container["name"].(string)
-		ip := container["ip"].(string)
+		ip := container["primaryIp"].(string)
 		serviceBinding := nme.Service {
 			Name: name,
-			 IpAddress: ip,
+			IpAddress: ip,
 		}
-		bindings[name] = serviceBinding
+		nmeServices[stackServiceName] = serviceBinding
 	}
-	return bindings, nil
+
+	for i := range services {
+		service, ok := services[i].(map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf("Error parsing service data: %v", services[i])
+		}
+		lbvserver, err := m.getLbvserverFromService(service, nmeServices)
+		if err != nil {
+			return nil, err
+		}
+		newConfig[(*lbvserver).Name] = *lbvserver
+	}
+
+
+	return newConfig, nil
 }
+
+func (m *MetadataHandler) getLbvserverFromService(service map[string]interface{}, nmeServices map[string]nme.Service) (*nme.Lbvserver, error) {
+	serviceName := service["name"].(string)
+	vip := service["vip"].(string)
+	containers := service["containers"].([]interface{})
+	serviceBindings := make(map[string]nme.Service)
+
+	for i := range containers {
+		containerName := containers[i].(string)
+		service := nmeServices[containerName]
+		serviceBindings[containerName] = service
+	}
+
+	lbvserver := nme.Lbvserver {
+		Name: serviceName, 
+		IpAddress: vip,
+		Bindings: serviceBindings,
+	}
+	return &lbvserver, nil
+}
+
