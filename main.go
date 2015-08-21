@@ -14,7 +14,7 @@ import (
 
 const (
 	linkLocalSNIP                  = "169.254.0.100"
-	maxRetriesToGetRancherIpForNME = 10
+	maxRetriesToGetRancherIpForNME = 120
 	waitMillisToGetRancherIpForNME = 1000
 )
 

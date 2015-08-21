@@ -34,7 +34,7 @@ class NSImage:
 
     def get_container_id(self):
         print "Running image " + self.image
-        (status, output) = commands.getstatusoutput("/usr/bin/docker ps -q -f status=running -f name=nme")
+        (status, output) = commands.getstatusoutput("/usr/bin/docker ps -q -f status=running -f name=NetScalerME")
         self.containerid = output
         self.nslfh.write(output)
 
@@ -113,7 +113,7 @@ class NSImage:
         nslog.log("Going to run netscaler image " + self.image)
         #subprocess.Popen(["/usr/bin/docker", "stop", self.id])
         #subprocess.Popen(["/usr/bin/docker", "rm", "-f", self.id])
-        subprocess.Popen(["/usr/bin/docker", "run", "--name", "nme", "--privileged", "-l", "io.rancher.container.network=true", "--hostname", self.id, "-p", self.host_sshport + ":22",  "-p" , self.host_httpport + ":80", "-d", "-t",  self.image, "/bin/bash" ])
+        subprocess.Popen(["/usr/bin/docker", "run", "--name", "NetScalerME", "--privileged", "-l", "io.rancher.container.network=true", "--hostname", self.id, "-p", self.host_sshport + ":22",  "-p" , self.host_httpport + ":80", "-d", "-t",  self.image, "/bin/bash" ])
         time.sleep(5)
         self.get_container_id()
         self.get_container_pid()

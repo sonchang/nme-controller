@@ -76,6 +76,7 @@ func (n NitroApi) GetLbvservers() (map[string]map[string]string, error) {
 		lbvserverDetails := make(map[string]string)
 		lbvserverDetails["ipaddress"] = lbvserverMap["ipv46"].(string)
 		lbvserverDetails["port"] = fmt.Sprintf("%s", lbvserverMap["port"])
+		lbvserverDetails["servicetype"] = lbvserverMap["servicetype"].(string)
 
 		name := lbvserverMap["name"].(string)
 		lbvservers[name] = lbvserverDetails
@@ -103,7 +104,11 @@ func (n NitroApi) GetLbvserverBindings(lbvserverName string) (map[string]map[str
 
 		lbvserverBindingDetails := make(map[string]string)
 		lbvserverBindingDetails["ipaddress"] = lbvserverBindingMap["ipv46"].(string)
-		// port and servicetype?
+		lbvserverBindingDetails["port"] = fmt.Sprintf("%s", lbvserverBindingMap["port"])
+		if lbvserverBindingDetails["port"] == "65535" {
+			lbvserverBindingDetails["port"] = "*"
+		}
+		lbvserverBindingDetails["servicetype"] = lbvserverBindingMap["servicetype"].(string)
 
 		name := lbvserverBindingMap["servicename"].(string)
 		lbvserverBindings[name] = lbvserverBindingDetails
@@ -153,13 +158,13 @@ func (n NitroApi) AddNSIP(ip string) error {
 }
 
 // Refactor these to its own class
-func (n NitroApi) CreateService(name string, ip string) error {
+func (n NitroApi) CreateService(name, ip, port string) error {
 	service := make(map[string]map[string]string)
 	service["service"] = make(map[string]string)
 	service["service"]["name"] = name
 	service["service"]["servicetype"] = "ANY"
 	service["service"]["ip"] = ip
-	service["service"]["port"] = "*"
+	service["service"]["port"] = port
 
 	data, err := json.Marshal(service)
 	if err != nil {
@@ -174,13 +179,13 @@ func (n NitroApi) DeleteService(name string) error {
 	return err
 }
 
-func (n NitroApi) CreateLbvserver(lbvserverName string, vip string) error {
+func (n NitroApi) CreateLbvserver(lbvserverName, vip, port, servicetype string) error {
 	lb := make(map[string]map[string]string)
 	lb["lbvserver"] = make(map[string]string)
 	lb["lbvserver"]["name"] = lbvserverName
-	lb["lbvserver"]["servicetype"] = "ANY"
+	lb["lbvserver"]["servicetype"] = servicetype
 	lb["lbvserver"]["ipv46"] = vip
-	lb["lbvserver"]["port"] = "*"
+	lb["lbvserver"]["port"] = port
 
 	data, err := json.Marshal(lb)
 	if err != nil {

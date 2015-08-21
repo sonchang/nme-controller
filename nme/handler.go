@@ -81,7 +81,7 @@ func (n NmeHandler) UpdateNSIP(ipAddresses ...string) error {
 }
 
 func (n NmeHandler) CreateLB(lb Lbvserver) error {
-	err := n.apiHandler.CreateLbvserver(lb.Name, lb.IpAddress)
+	err := n.apiHandler.CreateLbvserver(lb.Name, lb.IpAddress, lb.Port, lb.ServiceType)
 	if err != nil {
 		return err
 	}
@@ -102,7 +102,7 @@ func (n NmeHandler) CreateServiceAndBinding(lb Lbvserver, service Service) error
 	if service.Name == "" || service.IpAddress == "" {
 		return nil
 	}
-	err := n.apiHandler.CreateService(service.Name, service.IpAddress)
+	err := n.apiHandler.CreateService(service.Name, service.IpAddress, service.Port)
 	if err != nil {
 		return err
 	}

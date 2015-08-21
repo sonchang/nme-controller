@@ -3,6 +3,7 @@ package metadata
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"io/ioutil"
 	"net/http"
 	log "github.com/sonchang/nme-controller/Godeps/_workspace/src/github.com/Sirupsen/logrus"
@@ -12,6 +13,14 @@ import (
 
 type MetadataHandler struct {
 	metadataUrl string
+}
+
+type ExtLbConfig struct {
+	stackName string
+	serviceName string
+	publicPort string
+	privatePort string
+	serviceType string
 }
 
 func NewHandler(url string) MetadataHandler {
@@ -116,12 +125,16 @@ func (m *MetadataHandler) getLbConfigFromJSONResults(services, containers []inte
 		}
 	}
 
+	serviceToPortConfig, err := m.getServiceToPortConfigsFromVipService(services)
+	if err != nil {
+		return nil, err
+	}
 	for i := range services {
 		service, ok := services[i].(map[string]interface{})
 		if !ok {
 			return nil, fmt.Errorf("Error parsing service data: %v", services[i])
 		}
-		lbvserver, err := m.getLbvserverFromService(service, nmeServices)
+		lbvserver, err := m.getLbvserverFromService(service, nmeServices, serviceToPortConfig)
 		if err != nil {
 			return nil, err
 		}
@@ -132,25 +145,120 @@ func (m *MetadataHandler) getLbConfigFromJSONResults(services, containers []inte
 	return newConfig, nil
 }
 
-func (m *MetadataHandler) getLbvserverFromService(service map[string]interface{}, nmeServices map[string]nme.Service) (*nme.Lbvserver, error) {
+func (m *MetadataHandler) getServiceToPortConfigsFromVipService(services []interface{}) (map[string]ExtLbConfig, error) {
+	for i := range services {
+		service, ok := services[i].(map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf("Error parsing service data: %v", services[i])
+		}
+		labels := service["labels"].(map[string]interface{})
+		networkServices, ok := labels["io.rancher.network.services"]
+		if !ok || !strings.Contains(networkServices.(string), "vipService") {
+			log.Debugf("skipping %v", service)
+			continue
+		}
+		extLbConfigs, ok := labels["io.rancher.netscaler.lb"].(string)
+		if ok {
+			log.Debugf("found netscaler external lb configs: %v", extLbConfigs)
+			serviceToPortConfigs := make(map[string]ExtLbConfig)
+			configs := strings.Split(extLbConfigs, ",")
+			for i := range configs {
+				log.Debugf("configs %v", configs)
+				extLbConfigPieces := strings.Split(configs[i], ":")
+				switch len(extLbConfigPieces) {
+				case 2, 3:
+					stackServiceName := strings.Split(extLbConfigPieces[0], "/")
+					if len(stackServiceName) != 2 {
+						continue
+					}
+					var portProtocol []string
+					var publicPort string
+					if len(extLbConfigPieces) == 2 {
+						portProtocol = strings.Split(extLbConfigPieces[1], "/")
+					} else if len(extLbConfigPieces) == 3 {
+						publicPort = extLbConfigPieces[1]
+						portProtocol = strings.Split(extLbConfigPieces[2], "/")
+					}
+					privatePort := portProtocol[0]
+					serviceType := "ANY"
+					if len(portProtocol) > 1 {
+						serviceType = strings.ToUpper(portProtocol[1])
+					}
+					if publicPort == "" {
+						publicPort = privatePort
+					}
+					extLbConfig := ExtLbConfig {
+						stackName: stackServiceName[0],
+						serviceName: stackServiceName[1],
+						publicPort: publicPort,
+						privatePort: privatePort,
+						serviceType: serviceType,
+					}
+					log.Debugf("extLbConfig: %v", extLbConfig)
+					serviceToPortConfigs[extLbConfig.stackName + "/" + extLbConfig.serviceName] = extLbConfig
+				}
+			}
+			return serviceToPortConfigs, nil
+		}
+		return nil, nil
+	}
+	return nil, nil
+}
+
+func (m *MetadataHandler) getLbvserverFromService(
+		service map[string]interface{},
+		nmeServices map[string]nme.Service,
+		serviceToPortConfig map[string]ExtLbConfig) (*nme.Lbvserver, error) {
+
+	stackName := service["stack_name"].(string)
 	serviceName := service["name"].(string)
+	stackServiceName := stackName + "/" + serviceName
+
 	vip := service["vip"].(string)
 	containers := service["containers"].([]interface{})
 	serviceBindings := make(map[string]nme.Service)
+
+	var publicPort string
+	var privatePort string
+	var serviceType string
+	extLbConfig, ok := serviceToPortConfig[stackServiceName]
+	if ok {
+		publicPort = extLbConfig.publicPort
+		privatePort = extLbConfig.privatePort
+		serviceType = extLbConfig.serviceType
+	}
 
 	for i := range containers {
 		containerName := containers[i].(string)
 		service, ok := nmeServices[containerName]
 		if ok {
+			if privatePort != "" {
+				service.Port = privatePort
+			} else if publicPort != "" {
+				service.Port = publicPort
+			} else {
+				service.Port = "*"
+			}
 			serviceBindings[containerName] = service
 		}
 	}
 
 	lbvserver := nme.Lbvserver {
-		Name: serviceName, 
+		Name: stackName + "_" + serviceName, 
 		IpAddress: vip,
 		Bindings: serviceBindings,
 	}
+
+	if serviceType == "" {
+		lbvserver.ServiceType = "ANY"
+	} else {
+		lbvserver.ServiceType = serviceType
+	}
+
+	if publicPort == "" {
+		lbvserver.Port = "*"
+	} else {
+		lbvserver.Port = publicPort
+	}
 	return &lbvserver, nil
 }
-
