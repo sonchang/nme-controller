@@ -151,7 +151,11 @@ func (m *MetadataHandler) getServiceToPortConfigsFromVipService(services []inter
 		if !ok {
 			return nil, fmt.Errorf("Error parsing service data: %v", services[i])
 		}
-		labels := service["labels"].(map[string]interface{})
+		labels, ok := service["labels"].(map[string]interface{})
+		if !ok {
+			log.Debugf("skipping %v", service)
+			continue
+		}
 		networkServices, ok := labels["io.rancher.network.services"]
 		if !ok || !strings.Contains(networkServices.(string), "vipService") {
 			log.Debugf("skipping %v", service)
