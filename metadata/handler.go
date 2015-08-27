@@ -134,6 +134,14 @@ func (m *MetadataHandler) getLbConfigFromJSONResults(services, containers []inte
 		if !ok {
 			return nil, fmt.Errorf("Error parsing service data: %v", services[i])
 		}
+		labels, ok := service["labels"].(map[string]interface{})
+		if ok {
+			netscalerService, ok := labels["io.rancher.netscaler.me"].(string)
+			if ok {
+				log.Debugf("skipping netscaler service: %v", service)
+				continue
+			}
+		}
 		lbvserver, err := m.getLbvserverFromService(service, nmeServices, serviceToPortConfig)
 		if err != nil {
 			return nil, err

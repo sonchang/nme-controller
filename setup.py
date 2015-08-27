@@ -21,7 +21,7 @@ class NSImage:
     def __init__(self, id, image="nme"):
         self.image = image
         self.pid = 0
-        self.containerid = 0
+        self.containerid = ""
         self.numintf = 0
         self.nsip = 0
         self.nsloopip = 0
@@ -33,10 +33,19 @@ class NSImage:
         self.dockerip = 0
 
     def get_container_id(self):
-        print "Running image " + self.image
-        (status, output) = commands.getstatusoutput("/usr/bin/docker ps -q -f status=running -f name=NetScalerME")
-        self.containerid = output
-        self.nslfh.write(output)
+        # TODO: It would be nicer to filter by container_name rather than by label since currently, we don't have a very good label to filter
+        # by since labels are merged for sidekick services.  The one used here basically hardcodes the stack and service name used to start
+        # up the NetScaler global service.  Unfortunately, using the 'container_name' directive in compose.yml doesn't seem to work.
+        retryCount = 0
+        while self.containerid == "":
+            (status, output) = commands.getstatusoutput("/usr/bin/docker ps -q -f status=running -f label=io.rancher.stack_service.name=netscaler/Sidekick/NetScalerME")
+            if output != "":
+                self.containerid = output
+                self.nslfh.write(output)
+            else:
+                retryCount+= 1
+                print "Retry count " + str(retryCount) + ". Sleeping for 2 seconds"
+                time.sleep(2)
 
     def get_container_pid(self):
         (status, output) = commands.getstatusoutput("/usr/bin/docker inspect -f {{.State.Pid}} " +  self.containerid)
@@ -110,11 +119,7 @@ class NSImage:
 	    pass
 	
         self.nslfh = open(".nslock" + self.id, "w")
-        nslog.log("Going to run netscaler image " + self.image)
-        #subprocess.Popen(["/usr/bin/docker", "stop", self.id])
-        #subprocess.Popen(["/usr/bin/docker", "rm", "-f", self.id])
-        subprocess.Popen(["/usr/bin/docker", "run", "--name", "NetScalerME", "--privileged", "-l", "io.rancher.container.network=true", "--hostname", self.id, "-p", self.host_sshport + ":22",  "-p" , self.host_httpport + ":80", "-d", "-t",  self.image, "/bin/bash" ])
-        time.sleep(5)
+        nslog.log("Looking for netscaler container " + self.image)
         self.get_container_id()
         self.get_container_pid()
         self.create_interface("eth1", bridge)
